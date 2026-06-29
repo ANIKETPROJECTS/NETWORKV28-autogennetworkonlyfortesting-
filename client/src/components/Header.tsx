@@ -399,6 +399,9 @@ export function Header({
       parsed.tcharData,
       parsed.vSchedules,
     );
+    // Auto-arrange immediately after loading — store is synchronous so positions
+    // are available in the same tick.
+    autoArrange();
     onActivate?.();
     setShowImportInp(false);
     setInpFile(null);
@@ -408,7 +411,7 @@ export function Header({
       title: 'Network Generated',
       description: `"${parsed.projectName}" loaded — ${parsed.nodes.length} nodes, ${parsed.edges.length} connections.`,
     });
-  }, [inpPreview, loadNetwork, onActivate, toast]);
+  }, [inpPreview, loadNetwork, autoArrange, onActivate, toast]);
 
   const [localParams, setLocalParams] = useState(computationalParams);
   const [selectedElementId, setSelectedElementId] = useState<string>("");

@@ -568,7 +568,7 @@ function buildReactFlowGraph(
   projectName: string
 ): { nodes: WhamoNode[]; edges: WhamoEdge[]; pcharData: Record<number, PcharType>; tcharData: Record<number, TcharType>; vSchedules: Record<number, { t: number; g: number }[]> } {
   const { elemLinks, elemAt, junctions, nodeElevations } = topo;
-  const { reservoirs, conduits, pumps, turbines, oneway, oppumps, opturbs } = elems;
+  const { reservoirs, conduits, pumps, turbines, oneway, oppumps, opturbs, surgeTanks, flowBCs } = elems;
 
   let rfIdCounter = 1;
   const nextId = () => String(rfIdCounter++);
@@ -659,6 +659,7 @@ function buildReactFlowGraph(
 
   const getOrCreateWhamoNode = (whamoId: string): string => {
     if (nodeIdMap.has(whamoId)) return nodeIdMap.get(whamoId)!;
+    // Node was not pre-created — figure out what type it is
     const rfId = nextId();
     nodeIdMap.set(whamoId, rfId);
     const elev = nodeElevations.get(whamoId) ?? 0;
@@ -666,22 +667,40 @@ function buildReactFlowGraph(
     const nodeNum = parseInt(whamoId) || nodeObjects.length + 1;
     const isJunction = junctions.has(whamoId);
 
-    const resId = [...elemAt.entries()].find(([, nid]) => nid === whamoId)?.[0];
-    if (resId && reservoirs.has(resId)) {
-      const r = reservoirs.get(resId)!;
+    // Find if any element is declared AT this node
+    const atElemId = [...elemAt.entries()].find(([, nid]) => nid === whamoId)?.[0];
+
+    if (atElemId && reservoirs.has(atElemId)) {
+      const r = reservoirs.get(atElemId)!;
       nodeObjects.push({
-        id: rfId,
-        type: 'reservoir',
-        position: pos,
-        data: {
-          label: resId,
-          type: 'reservoir',
-          nodeNumber: nodeNum,
-          elevation: elev,
-          reservoirElevation: r.elevation,
-          mode: r.mode as any,
-          hScheduleNumber: r.hScheduleNumber,
-        }
+        id: rfId, type: 'reservoir', position: pos,
+        data: { label: atElemId, type: 'reservoir', nodeNumber: nodeNum, elevation: elev,
+          reservoirElevation: r.elevation, mode: r.mode as any, hScheduleNumber: r.hScheduleNumber }
+      });
+    } else if (atElemId && surgeTanks.has(atElemId)) {
+      const st = surgeTanks.get(atElemId)!;
+      nodeObjects.push({
+        id: rfId, type: 'surgeTank', position: pos,
+        data: { label: atElemId, type: 'surgeTank', nodeNumber: nodeNum, elevation: elev,
+          tankTop: st.tankTop, tankBottom: st.tankBottom, diameter: st.diameter,
+          celerity: st.celerity, friction: st.friction, stType: st.stType }
+      });
+    } else if (atElemId && flowBCs.has(atElemId)) {
+      const fb = flowBCs.get(atElemId)!;
+      nodeObjects.push({
+        id: rfId, type: 'flowBoundary', position: pos,
+        data: { label: atElemId, type: 'flowBoundary', nodeNumber: nodeNum, elevation: elev,
+          scheduleNumber: fb.scheduleNumber }
+      });
+    } else if (atElemId && turbines.has(atElemId)) {
+      const t = turbines.get(atElemId)!;
+      const opInfo = opturbs.get(atElemId);
+      nodeObjects.push({
+        id: rfId, type: 'turbine', position: pos,
+        data: { label: atElemId, type: 'turbine', nodeNumber: nodeNum, elevation: elev,
+          turbineType: t.turbineType, syncSpeed: t.syncSpeed, wr2: t.wr2,
+          turbFriction: t.turbFriction, windage: t.windage,
+          operationMode: opInfo?.mode || 'TURBINE', vScheduleNumber: opInfo?.vScheduleNumber ?? 1 }
       });
     } else {
       nodeObjects.push({
@@ -699,9 +718,90 @@ function buildReactFlowGraph(
     return rfId;
   };
 
-  // ── Pre-pass: create node-attached turbines BEFORE processing links ──────
-  // This ensures that when DA1 LINK 6 7 calls getOrCreateWhamoNode('7'),
-  // node 7 is already in nodeIdMap as a turbine, not created as a plain node.
+  // ── Pre-pass: create ALL node-attached elements BEFORE processing links ──
+  // Order matters: create each element type so that when ELEM C1 LINK N1 N2
+  // calls getOrCreateWhamoNode('N1'), the node is already typed correctly.
+
+  // Reservoirs AT nodes
+  elemAt.forEach((nodeId, elemId) => {
+    if (!reservoirs.has(elemId)) return;
+    if (nodeIdMap.has(nodeId)) return;
+    const r = reservoirs.get(elemId)!;
+    const rfId = nextId();
+    nodeIdMap.set(nodeId, rfId);
+    const elev = nodeElevations.get(nodeId) ?? 0;
+    const pos = getPos(nodeId);
+    const nodeNum = parseInt(nodeId) || nodeObjects.length + 1;
+    nodeObjects.push({
+      id: rfId,
+      type: 'reservoir',
+      position: pos,
+      data: {
+        label: elemId,
+        type: 'reservoir',
+        nodeNumber: nodeNum,
+        elevation: elev,
+        reservoirElevation: r.elevation,
+        mode: r.mode as any,
+        hScheduleNumber: r.hScheduleNumber,
+      }
+    });
+  });
+
+  // Surge Tanks AT nodes
+  elemAt.forEach((nodeId, elemId) => {
+    if (!surgeTanks.has(elemId)) return;
+    if (nodeIdMap.has(nodeId)) return;
+    const st = surgeTanks.get(elemId)!;
+    const rfId = nextId();
+    nodeIdMap.set(nodeId, rfId);
+    const elev = nodeElevations.get(nodeId) ?? 0;
+    const pos = getPos(nodeId);
+    const nodeNum = parseInt(nodeId) || nodeObjects.length + 1;
+    nodeObjects.push({
+      id: rfId,
+      type: 'surgeTank',
+      position: pos,
+      data: {
+        label: elemId,
+        type: 'surgeTank',
+        nodeNumber: nodeNum,
+        elevation: elev,
+        tankTop: st.tankTop,
+        tankBottom: st.tankBottom,
+        diameter: st.diameter,
+        celerity: st.celerity,
+        friction: st.friction,
+        stType: st.stType,
+      }
+    });
+  });
+
+  // Flow Boundaries AT nodes
+  elemAt.forEach((nodeId, elemId) => {
+    if (!flowBCs.has(elemId)) return;
+    if (nodeIdMap.has(nodeId)) return;
+    const fb = flowBCs.get(elemId)!;
+    const rfId = nextId();
+    nodeIdMap.set(nodeId, rfId);
+    const elev = nodeElevations.get(nodeId) ?? 0;
+    const pos = getPos(nodeId);
+    const nodeNum = parseInt(nodeId) || nodeObjects.length + 1;
+    nodeObjects.push({
+      id: rfId,
+      type: 'flowBoundary',
+      position: pos,
+      data: {
+        label: elemId,
+        type: 'flowBoundary',
+        nodeNumber: nodeNum,
+        elevation: elev,
+        scheduleNumber: fb.scheduleNumber,
+      }
+    });
+  });
+
+  // Turbines AT nodes
   elemAt.forEach((nodeId, elemId) => {
     if (!turbines.has(elemId)) return;
     if (nodeIdMap.has(nodeId)) return;
@@ -928,12 +1028,10 @@ function buildReactFlowGraph(
     });
   });
 
-  // Node-attached non-turbine elements (reservoirs, etc.) — already handled inside
-  // getOrCreateWhamoNode via the elemAt lookup. Turbines were pre-created above.
-  elemAt.forEach((nodeId, elemId) => {
-    if (!turbines.has(elemId)) {
-      getOrCreateWhamoNode(nodeId);
-    }
+  // Ensure any remaining AT-nodes not yet visited via link processing get created.
+  // All typed elements were pre-created above, so this only creates plain nodes.
+  elemAt.forEach((nodeId, _elemId) => {
+    getOrCreateWhamoNode(nodeId);
   });
 
   const pcharData: Record<number, PcharType> = {};
