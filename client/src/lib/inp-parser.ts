@@ -983,6 +983,8 @@ export function parseInpFile(content: string): {
   pcharData: Record<number, PcharType>;
   tcharData: Record<number, TcharType>;
   vSchedules: Record<number, { t: number; g: number }[]>;
+  outputRequests: { id: string; elementId: string; elementType: 'node' | 'edge'; isElement?: boolean; requestType: 'HISTORY' | 'PLOT' | 'SPREADSHEET'; variables: string[] }[];
+  nodeSelectionSet: string[];
 } {
   // ── Strip all comment lines first (lines whose first non-space token is "C") ──
   // This lets all downstream section-detection logic focus on core structure only.
@@ -1047,5 +1049,75 @@ export function parseInpFile(content: string): {
 
   const { nodes, edges, pcharData, tcharData, vSchedules } = buildReactFlowGraph(topo, elems, projectName);
 
-  return { nodes, edges, projectName, computationalParams, pcharData, tcharData, vSchedules };
+  // ── Parse OUTPUT REQUEST blocks (HISTORY / PLOT / SPREADSHEET) ────────────
+  // Each block starts with its keyword, contains NODE/ELEM lines, ends with FINISH.
+  const rawRequests: {
+    reqType: 'HISTORY' | 'PLOT' | 'SPREADSHEET';
+    isElem: boolean;
+    whamoId: string;
+    vars: string[];
+  }[] = [];
+
+  let currentReqType: 'HISTORY' | 'PLOT' | 'SPREADSHEET' | null = null;
+  for (const line of lines) {
+    const t = line.trim();
+    if (!t) continue;
+    const upper = t.toUpperCase();
+    if (/^HISTORY\b/.test(upper))     { currentReqType = 'HISTORY';     continue; }
+    if (/^PLOT\b/.test(upper))        { currentReqType = 'PLOT';        continue; }
+    if (/^SPREADSHEET\b/.test(upper)) { currentReqType = 'SPREADSHEET'; continue; }
+    if (currentReqType && /^FINISH\b/i.test(upper)) { currentReqType = null; continue; }
+    if (!currentReqType) continue;
+
+    const nodeM = t.match(/^NODE\s+(\S+)\s+(.*)/i);
+    const elemM = t.match(/^ELEM\s+(\S+)\s+(.*)/i);
+    const entry = nodeM || elemM;
+    if (!entry) continue;
+    const isElem = !!elemM;
+    const whamoId = entry[1];
+    const vars = entry[2].trim().split(/\s+/).map(v => {
+      const u = v.toUpperCase();
+      if (u === 'PRESSURE') return 'PRESS';
+      return u;
+    }).filter(v => v.length > 0);
+    rawRequests.push({ reqType: currentReqType!, isElem, whamoId, vars });
+  }
+
+  // Map WHAMO IDs → React Flow IDs
+  let reqCounter = 1;
+  const outputRequests: { id: string; elementId: string; elementType: 'node' | 'edge'; isElement?: boolean; requestType: 'HISTORY' | 'PLOT' | 'SPREADSHEET'; variables: string[] }[] = [];
+  for (const raw of rawRequests) {
+    let elementId: string | null = null;
+    let elementType: 'node' | 'edge' = 'node';
+    if (raw.isElem) {
+      // ELEM <label> — find node whose data.label matches, or edge
+      const rfNode = nodes.find(n => String(n.data?.label) === raw.whamoId);
+      if (rfNode) {
+        elementId = rfNode.id;
+        elementType = 'node';
+      } else {
+        const rfEdge = edges.find(e => String(e.data?.label) === raw.whamoId);
+        if (rfEdge) { elementId = rfEdge.id; elementType = 'edge'; }
+      }
+    } else {
+      // NODE <number> — find node whose data.nodeNumber matches
+      const nodeNum = parseInt(raw.whamoId);
+      const rfNode = nodes.find(n => Number(n.data?.nodeNumber) === nodeNum);
+      if (rfNode) { elementId = rfNode.id; elementType = 'node'; }
+    }
+    if (!elementId) continue;
+    outputRequests.push({
+      id: `req-inp-${reqCounter++}`,
+      elementId,
+      elementType,
+      isElement: raw.isElem,
+      requestType: raw.reqType,
+      variables: raw.vars,
+    });
+  }
+
+  // nodeSelectionSet: all RF node IDs (select every node by default on import)
+  const nodeSelectionSet = nodes.map(n => n.id);
+
+  return { nodes, edges, projectName, computationalParams, pcharData, tcharData, vSchedules, outputRequests, nodeSelectionSet };
 }
