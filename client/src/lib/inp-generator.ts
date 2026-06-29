@@ -200,6 +200,7 @@ export function generateInpFile(nodes: WhamoNode[], edges: WhamoEdge[], autoDown
       if (isSelected) {
         const unit = node.data.unit || globalUnit;
         const elev = toFPS(Number(node.data.elevation), unit, 'elevation');
+        addComment(node.data.comment);
         addL(`NODE ${id} ELEV ${elev}`);
       }
     }
