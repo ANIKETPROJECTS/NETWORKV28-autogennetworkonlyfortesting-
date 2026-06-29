@@ -345,6 +345,12 @@ export function Header({
     projectName: string;
     nodeCount: number;
     edgeCount: number;
+    nodeTypes: Record<string, number>;
+    edgeTypes: Record<string, number>;
+    stageCount: number;
+    tmax: number | null;
+    pcharCount: number;
+    tcharCount: number;
     parsed: any;
   } | null>(null);
   const [inpParseError, setInpParseError] = useState<string | null>(null);
@@ -360,20 +366,32 @@ export function Header({
       const content = await file.text();
       const { parseInpFile } = await import('@/lib/inp-parser');
       const result = parseInpFile(content);
-      const nodeTypes = new Map<string, number>();
+
+      const nodeTypeCounts: Record<string, number> = {};
       result.nodes.forEach((n: any) => {
         const t = n.type || 'node';
-        nodeTypes.set(t, (nodeTypes.get(t) || 0) + 1);
+        nodeTypeCounts[t] = (nodeTypeCounts[t] || 0) + 1;
       });
-      const edgeTypes = new Map<string, number>();
+
+      const edgeTypeCounts: Record<string, number> = {};
       result.edges.forEach((e: any) => {
         const t = e.data?.type || 'conduit';
-        edgeTypes.set(t, (edgeTypes.get(t) || 0) + 1);
+        edgeTypeCounts[t] = (edgeTypeCounts[t] || 0) + 1;
       });
+
+      const stages = result.computationalParams?.stages ?? [];
+      const tmax = stages.length > 0 ? stages[stages.length - 1].tmax : null;
+
       setInpPreview({
         projectName: result.projectName,
         nodeCount: result.nodes.length,
         edgeCount: result.edges.length,
+        nodeTypes: nodeTypeCounts,
+        edgeTypes: edgeTypeCounts,
+        stageCount: stages.length,
+        tmax,
+        pcharCount: Object.keys(result.pcharData || {}).length,
+        tcharCount: Object.keys(result.tcharData || {}).length,
         parsed: result,
       });
     } catch (err: any) {
@@ -1559,34 +1577,110 @@ export function Header({
               )}
 
               {/* Preview card */}
-              {inpPreview && !inpParsing && (
-                <div className="border border-teal-200 rounded-lg bg-teal-50 px-4 py-3 flex flex-col gap-2">
-                  <div className="flex items-center gap-2">
-                    <CheckCircle2 className="w-4 h-4 text-teal-600 flex-shrink-0" />
-                    <span className="text-[12px] font-semibold text-teal-800">Ready to generate</span>
+              {inpPreview && !inpParsing && (() => {
+                const NODE_LABELS: Record<string, string> = {
+                  reservoir: 'Reservoir',
+                  node: 'Node',
+                  junction: 'Junction',
+                  surgeTank: 'Surge Tank',
+                  flowBoundary: 'Flow Boundary',
+                };
+                const EDGE_LABELS: Record<string, string> = {
+                  conduit: 'Conduit',
+                  dummy: 'Dummy Pipe',
+                  pump: 'Pump',
+                  turbine: 'Turbine',
+                  checkValve: 'Check Valve',
+                };
+                const nodeRows = Object.entries(inpPreview.nodeTypes).sort((a, b) => b[1] - a[1]);
+                const edgeRows = Object.entries(inpPreview.edgeTypes).sort((a, b) => b[1] - a[1]);
+
+                return (
+                  <div className="border border-teal-200 rounded-lg bg-teal-50 overflow-hidden">
+                    {/* Header */}
+                    <div className="flex items-center gap-2 px-4 py-2.5 bg-teal-100 border-b border-teal-200">
+                      <CheckCircle2 className="w-4 h-4 text-teal-600 flex-shrink-0" />
+                      <span className="text-[12px] font-semibold text-teal-800">Ready to generate</span>
+                      <span className="ml-auto text-[11px] text-teal-600 font-medium truncate max-w-[180px]">{inpPreview.projectName}</span>
+                    </div>
+
+                    <div className="px-4 py-3 flex flex-col gap-3">
+
+                      {/* Nodes section */}
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Nodes</span>
+                          <span className="text-[10px] font-bold text-teal-700">{inpPreview.nodeCount} total</span>
+                        </div>
+                        <div className="bg-white border border-slate-200 rounded-md divide-y divide-slate-100">
+                          {nodeRows.length === 0 ? (
+                            <div className="px-3 py-1.5 text-[11px] text-slate-400 italic">None</div>
+                          ) : nodeRows.map(([type, count]) => (
+                            <div key={type} className="flex items-center justify-between px-3 py-1.5">
+                              <span className="text-[11px] text-slate-600">{NODE_LABELS[type] ?? type}</span>
+                              <span className="text-[11px] font-semibold text-slate-800">{count}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Connections section */}
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Connections</span>
+                          <span className="text-[10px] font-bold text-teal-700">{inpPreview.edgeCount} total</span>
+                        </div>
+                        <div className="bg-white border border-slate-200 rounded-md divide-y divide-slate-100">
+                          {edgeRows.length === 0 ? (
+                            <div className="px-3 py-1.5 text-[11px] text-slate-400 italic">None</div>
+                          ) : edgeRows.map(([type, count]) => (
+                            <div key={type} className="flex items-center justify-between px-3 py-1.5">
+                              <span className="text-[11px] text-slate-600">{EDGE_LABELS[type] ?? type}</span>
+                              <span className="text-[11px] font-semibold text-slate-800">{count}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Hydraulic data & simulation */}
+                      {(inpPreview.pcharCount > 0 || inpPreview.tcharCount > 0 || inpPreview.stageCount > 0) && (
+                        <div>
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-[10px] font-bold uppercase tracking-wide text-slate-400">Hydraulic Data</span>
+                          </div>
+                          <div className="bg-white border border-slate-200 rounded-md divide-y divide-slate-100">
+                            {inpPreview.pcharCount > 0 && (
+                              <div className="flex items-center justify-between px-3 py-1.5">
+                                <span className="text-[11px] text-slate-600">Pump curve types</span>
+                                <span className="text-[11px] font-semibold text-slate-800">{inpPreview.pcharCount}</span>
+                              </div>
+                            )}
+                            {inpPreview.tcharCount > 0 && (
+                              <div className="flex items-center justify-between px-3 py-1.5">
+                                <span className="text-[11px] text-slate-600">Turbine curve types</span>
+                                <span className="text-[11px] font-semibold text-slate-800">{inpPreview.tcharCount}</span>
+                              </div>
+                            )}
+                            {inpPreview.stageCount > 0 && (
+                              <div className="flex items-center justify-between px-3 py-1.5">
+                                <span className="text-[11px] text-slate-600">Simulation stages</span>
+                                <span className="text-[11px] font-semibold text-slate-800">{inpPreview.stageCount}</span>
+                              </div>
+                            )}
+                            {inpPreview.tmax !== null && (
+                              <div className="flex items-center justify-between px-3 py-1.5">
+                                <span className="text-[11px] text-slate-600">Max simulation time</span>
+                                <span className="text-[11px] font-semibold text-slate-800">{inpPreview.tmax} s</span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                    </div>
                   </div>
-                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 pl-6">
-                    <div className="text-[11px] text-slate-500">Project name</div>
-                    <div className="text-[11px] font-medium text-slate-700 truncate">{inpPreview.projectName}</div>
-                    <div className="text-[11px] text-slate-500">Nodes</div>
-                    <div className="text-[11px] font-medium text-slate-700">{inpPreview.nodeCount}</div>
-                    <div className="text-[11px] text-slate-500">Connections</div>
-                    <div className="text-[11px] font-medium text-slate-700">{inpPreview.edgeCount}</div>
-                    {Object.keys(inpPreview.parsed.pcharData || {}).length > 0 && (
-                      <>
-                        <div className="text-[11px] text-slate-500">Pump curves</div>
-                        <div className="text-[11px] font-medium text-slate-700">{Object.keys(inpPreview.parsed.pcharData).length} type(s)</div>
-                      </>
-                    )}
-                    {Object.keys(inpPreview.parsed.tcharData || {}).length > 0 && (
-                      <>
-                        <div className="text-[11px] text-slate-500">Turbine curves</div>
-                        <div className="text-[11px] font-medium text-slate-700">{Object.keys(inpPreview.parsed.tcharData).length} type(s)</div>
-                      </>
-                    )}
-                  </div>
-                </div>
-              )}
+                );
+              })()}
             </div>
 
             {/* Footer */}
