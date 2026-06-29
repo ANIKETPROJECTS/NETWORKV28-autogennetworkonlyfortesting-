@@ -1116,8 +1116,10 @@ export function parseInpFile(content: string): {
     });
   }
 
-  // nodeSelectionSet: all RF node IDs (select every node by default on import)
-  const nodeSelectionSet = nodes.map(n => n.id);
+  // nodeSelectionSet: all node numbers as strings (select every node by default on import).
+  // Must use nodeNumber.toString() — the same key format used by NodeSelectionPanel and
+  // setAllNodesSelected — because RF IDs are non-contiguous (edges share the ID counter).
+  const nodeSelectionSet = nodes.map(n => n.data?.nodeNumber?.toString() ?? n.id);
 
   return { nodes, edges, projectName, computationalParams, pcharData, tcharData, vSchedules, outputRequests, nodeSelectionSet };
 }
